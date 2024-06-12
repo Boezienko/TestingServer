@@ -104,7 +104,7 @@ void* handle_client(void* arg){
 // to
 void recv_(int sockfd, char* buf){
   memset(&buf, 0, sizeof buf); // clear buffer before using
-  if((numbytes = recv(new_fd, buf, MAXDATASIZE - 1, 0)) == -1){
+  if((recv(sockfd, buf, MAXDATASIZE - 1, 0)) == -1){
       perror("recv");
       exit(1);
   }
