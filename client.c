@@ -8,16 +8,32 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include "packet.h"
 
 #define PORT "3456"
 #define SERVER_IP "144.96.151.55"
 #define MAXDATASIZE 100 // max number of bytes we can get at once
 
 // to send messages easier and encapsulate error handling
-void send_(int sockfd, char* msg){
-  if(send(sockfd, msg, strlen(msg), 0) == -1){
+void send_(int sockfd, int flag, char* msg){
+  Packet packet;
+  char pktBuf[MAXDATASIZE];
+  
+  // prepare packet
+  packet.initialize = initializePacket;
+  
+  // give data to packet
+  packet.initialize(&packet, flag, msg);
+  packet.serialize(&packet, pktBuf);
+  
+  // send packet
+  if(send(sockfd, pktBuf, strlen(pktBuf), 0) == -1){
     perror("send");
   }
+  packet.free(&packet);
+  
+  // so that two sends do not send as part of the same stream
+  sleep(1);
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -35,6 +51,12 @@ int main(int argc, char *argv[]){
   struct addrinfo hints, *servinfo, *p;
   int rv;
   char s[INET6_ADDRSTRLEN];
+  
+  // make sure correct number of expected arguments
+  if(argc != 3){
+    fprintf(stderr, "ussage: client filename testecase_filename\n");
+    return 1;
+  }
   
   // ensure hints is clear and read to be filled
   memset(&hints, 0, sizeof hints);
@@ -79,13 +101,12 @@ int main(int argc, char *argv[]){
   printf("client: connecting to %s\n", s);
   
   // sending file to test's name
-  send_(sockfd, argv[1]);
+  send_(sockfd, 1, argv[1]);
 
-// this sleep is here so that the two sends do not send as part of the same stream
-  sleep(1);
+
   
   // sending testcase file's name
-  send_(sockfd, argv[2]);
+  send_(sockfd, 1, argv[2]);
   
   // clear buffer before using
   memset(&buf, 0, sizeof buf);
@@ -103,38 +124,13 @@ int main(int argc, char *argv[]){
   
   // read in file in chunks, then send, repeat until nothing is read in
   while((bytesRead = fread(buf, 1, MAXDATASIZE - 1, file)) > 0){
-    send_(sockfd, buf);
+    send_(sockfd, 2, buf);
     // clear buffer for reuse
     memset(buf, 0, sizeof buf);
   }
   
-  
-  
-  
-  // get each character and add it to buffer until end of file reached
-  /*
-  while((chr = getc(file)) != EOF){
-    printf("%c\n", chr);
-    if(bufi < MAXDATASIZE){ // collect the characters
-      buf[bufi] = chr;
-      bufi++;
-    } else { 
-      // send the collected characters
-      send_(sockfd, buf);
-      
-      // clear buffer before reuse
-      memset(&buf, 0, sizeof buf);
-    }
-  }
-  */
-  
   // signaling end of file
-  strcpy(buf, "\EOF");
-  send_(sockfd, buf);
-  // whole file should be sent now
-  
-  
-  
+  send_(sockfd, 3, "EOF");
   
   // receive message from server as to weather the program passed or failed
   

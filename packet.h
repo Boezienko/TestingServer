@@ -10,7 +10,7 @@
 // each packet will have a payload, which is it's actual message
 
 typedef struct Packet {
-    int flag; // 1 for command, 2 for datafile, 3 for last datafile in transmission
+    int flag; // -1 for null packet, 0 for command, 1 for filename, 2 for file contents, 3 for last packet in transmission
     int length;
     char* payload; // message inside packet
     
