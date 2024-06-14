@@ -16,99 +16,181 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <inttypes.h>
+#include "packet.h"
 
 #define PORT "3456"
 #define BACKLOG 10// how many pending connections queue will hold
 #define MAXDATASIZE 100 // max number of bytes we can get at once
 
+
+// to make receiving messages easier and encapsulate error handling
+void recv_(int sockfd, Packet* packet){
+  char pktBuf[MAXDATASIZE];
+  // clear buffer before using
+  memset(pktBuf, 0, MAXDATASIZE);
+  
+  // receive packet from client
+  if((recv(sockfd, pktBuf, MAXDATASIZE - 1, 0)) == -1){
+      perror("recv");
+      close(sockfd);
+      exit(1);
+  }
+  
+  // parse information and store in packet
+  packet->deserialize(packet, pktBuf);
+}
+
+// to make turn the filename into an executable
+char* rmExtnsn(char* file){
+  char *dotPos = strchr(file, '.');
+  size_t newLen = (dotPos != NULL) ? (dotPos - file) : strlen(file);
+  
+  // allocate memory for executable
+  char* exe = (char*)malloc(newLen + 1);
+  
+  // copy characters up to .
+  strncpy(exe, file, newLen);
+  exe[newLen] = '\0';
+  
+  return exe;
+}
+
+// function to compile a file
+// IF THIS FUNCTION IS USED RUN ALSO NEEDS TO BE USED
+char* compile(char* filename){
+  pid_t pid;
+  int status;
+  char* executable = rmExtnsn(filename);
+  
+  // make child process to compile
+  if(!(pid = fork())){
+    char *args[] = {"gcc", filename, "-o", executable, NULL};
+    if(execvp(args[0], args)){
+      // if execvp returns, an error occured
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  // wait for compilation to complete
+  waitpid(pid, &status, 0);
+  
+  // make executable produced runable
+  if(chmod(executable, S_IRWXU) == -1){
+    perror("chmod failed");
+    exit(EXIT_FAILURE);
+  }
+  
+  return executable; // note that this is still allocated on the heap and still needs to be freed
+}
+
+void run(char* executable){
+  pid_t pid;
+  int status;
+  char arg0[strlen(executable) + 3];
+  
+  // making first argument
+  snprintf(arg0, sizeof(arg0), "./%s", executable);
+  
+  // make child process to run executable
+  if(!(pid = fork())){
+    char *args[] = {arg0, "9", NULL};
+    if(execvp(args[0], args)){
+      // if execvp returns, an error occured
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+  }
+  
+    waitpid(pid, &status, 0);
+  return;
+}
+
 // function for theads to run to handle clients
 void* handle_client(void* arg){
-  printf("Handling thread entered\n");
   FILE* fp;
   bool doneReceiving = false;
   int numbytes = 0;
   int new_fd = *((int*)arg);
   free(arg); // dealocating memory allocated for clients file descriptor
-  char buf[MAXDATASIZE];
-  memset(&buf, 0, sizeof buf); // clear buffer before using
+  char buf[MAXDATASIZE];  
+  Packet tempPack; 
+  //char filename[256 + MAXDATASIZE];
+  char* filename = NULL;
   
-  char filename[256 + MAXDATASIZE];
-  
-  // populating filename with threadId
-  sprintf(filename, "%"PRIu64, (uint64_t)pthread_self());
+  // initializing variables
+  tempPack.initialize = initializePacket;
+  tempPack.initialize(&tempPack, 1, "");
+  // clear buffers before using
+  memset(buf, 0, MAXDATASIZE);
+  //memset(filename, 0, 256 + MAXDATASIZE);
   
   // get filename from client
-  if((numbytes = recv(new_fd, buf, MAXDATASIZE - 1, 0)) == -1){
-      perror("recv");
-      exit(1);
-  }
+  recv_(new_fd, &tempPack);
   
+  // populating filename with threadId
+  asprintf(&filename, "%"PRIu64 "%s", (uint64_t)pthread_self(), tempPack.payload);
+
+
   // show what filename we're testing
-  printf("Filename to test: %s\n", buf);
-  
+  printf("Filename to test: %s\n", tempPack.payload);
+
   // making it so filename is (whatever name was sent)+threadId, so if multiple users send files with the same name, they will be unique
-  strcat(filename, buf);
+  //strcat(filename, tempPack.payload);
   
+  tempPack.free(&tempPack);
   // create file and prepare to write to it
   fp = fopen(filename, "w");
   if(fp == NULL){
     perror("Error creating file");
+    close(new_fd);
     exit(1);
   }
   
-  // the issue we are having getting the testcase is that 
   // get testcase file name
-  memset(&buf, 0, sizeof buf); // clear buffer before using
-  if((numbytes = recv(new_fd, buf, MAXDATASIZE - 1, 0)) == -1){
-      perror("recv");
-      exit(1);
-  }
-  printf("Testcase filename: %s\n", buf);
+  recv_(new_fd, &tempPack);
+  printf("Testcase filename: %s\n", tempPack.payload);
+  tempPack.free(&tempPack);
   
   // get file from client
   while(!doneReceiving){
     printf("Entered while loop\n");
-    // recieve message that can fit in buffer
-    if((numbytes = recv(new_fd, buf, MAXDATASIZE - 1, 0)) == -1){
-      perror("recv");
-      exit(1);
+    
+    // prep packet for receiving
+    tempPack.initialize(&tempPack, -1, "");
+    
+    // recieve message
+    recv_(new_fd, &tempPack);
+        
+    if(tempPack.flag == 3){
+      doneReceiving = true;
+      tempPack.free(&tempPack);
+      continue;
     }
     
-    // print what was received
-    for(int i = 0; i < MAXDATASIZE; i++){
-      printf("%c", buf[i]);
-      fprintf(fp,"%c", buf[i]);
-      if(buf[i] == EOF){
-        doneReceiving = true;
-        fclose(fp);
-        break;
-      }
-    }
-    
-    if(doneReceiving){
-      break;
-    }
-    
-    // clear buffer for reuse
-    
-    // need to delete later when sending entire file
+    // write message to file
+    fwrite(tempPack.payload, sizeof(char), tempPack.length, fp);
+    tempPack.free(&tempPack);
   }
   
-  // use execvp to run their code
-
+  //done writing to file
+  fclose(fp);
+  
+  // compile and run the file
+  char* executable = compile(filename);
+  run(executable);
+  
+  // done running submitted code
+  free(executable);
+  free(filename);
+  
+  // done communicating with client
   close(new_fd);
   printf("\nThread done\n");
   return NULL;
 }
 
-// to
-void recv_(int sockfd, char* buf){
-  memset(&buf, 0, sizeof buf); // clear buffer before using
-  if((recv(sockfd, buf, MAXDATASIZE - 1, 0)) == -1){
-      perror("recv");
-      exit(1);
-  }
-}
+
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa){
