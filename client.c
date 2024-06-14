@@ -14,26 +14,53 @@
 #define SERVER_IP "144.96.151.55"
 #define MAXDATASIZE 100 // max number of bytes we can get at once
 
+
+// to make sending packets easier
+void send_packet(int sockfd, Packet* pkt){
+  char* spkt = pkt->serialize(pkt);
+  
+  printf("\nSending:\n%s\n", spkt);
+  
+  
+  if(send(sockfd, spkt, strlen(spkt), 0) == -1){
+    perror("send");
+  }
+  free(spkt);
+  // so multiple sends streams aren't interpereted as one
+  sleep(1);
+}
+
 // to send messages easier and encapsulate error handling
-void send_(int sockfd, int flag, char* msg){
+void send_file(int sockfd, char* filename){
+  
+  FILE* file = fopen(filename, "r");
+  if(file == NULL){
+    perror("fopen");
+    return;
+  }
+  
   Packet packet;
   char pktBuf[MAXDATASIZE];
+  size_t numBytes;
+  int seqNum = 0;
   
   // prepare packet
   packet.initialize = initializePacket;
   
-  // give data to packet
-  packet.initialize(&packet, flag, msg);
-  packet.serialize(&packet, pktBuf);
-  
-  // send packet
-  if(send(sockfd, pktBuf, strlen(pktBuf), 0) == -1){
-    perror("send");
+  while((numBytes = fread(pktBuf, 1, MAXDATASIZE-1, file)) > 0){
+    pktBuf[numBytes] = '\0';
+    packet.initialize(&packet, 2, seqNum, pktBuf);
+    send_packet(sockfd, &packet);
+    packet.free(&packet);
+    seqNum++;
   }
+  
+  // send EOF packet
+  packet.initialize(&packet, 3, seqNum, "EOF");
+  send_packet(sockfd, &packet);
   packet.free(&packet);
   
-  // so that two sends do not send as part of the same stream
-  sleep(1);
+  fclose(file);
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -51,6 +78,8 @@ int main(int argc, char *argv[]){
   struct addrinfo hints, *servinfo, *p;
   int rv;
   char s[INET6_ADDRSTRLEN];
+  Packet tempPack;
+  tempPack.initialize = initializePacket;
   
   // make sure correct number of expected arguments
   if(argc != 3){
@@ -101,36 +130,17 @@ int main(int argc, char *argv[]){
   printf("client: connecting to %s\n", s);
   
   // sending file to test's name
-  send_(sockfd, 1, argv[1]);
-
-
+  tempPack.initialize(&tempPack, 1, 0, argv[1]);
+  send_packet(sockfd, &tempPack);
+  tempPack.free(&tempPack);
   
   // sending testcase file's name
-  send_(sockfd, 1, argv[2]);
+  tempPack.initialize(&tempPack, 1, 1, argv[2]);
+  send_packet(sockfd, &tempPack);
+  tempPack.free(&tempPack);
   
-  // clear buffer before using
-  memset(&buf, 0, sizeof buf);
-  
-  // read in file that we need to read in, as we're reading it in, we will be sending it
-  FILE* file = fopen(argv[1], "r");
-  if(file == NULL){
-    perror("fopen");
-    close(sockfd);
-    return 1;
-  }
-  
-  // variables to use to read in file
-  size_t bytesRead;
-  
-  // read in file in chunks, then send, repeat until nothing is read in
-  while((bytesRead = fread(buf, 1, MAXDATASIZE - 1, file)) > 0){
-    send_(sockfd, 2, buf);
-    // clear buffer for reuse
-    memset(buf, 0, sizeof buf);
-  }
-  
-  // signaling end of file
-  send_(sockfd, 3, "EOF");
+  // send the actual file
+  send_file(sockfd, argv[1]);
   
   // receive message from server as to weather the program passed or failed
   
@@ -138,7 +148,6 @@ int main(int argc, char *argv[]){
   
   // freeing up this structure
   freeaddrinfo(servinfo);
-  fclose(file);
   close(sockfd);
   
   return 0;
