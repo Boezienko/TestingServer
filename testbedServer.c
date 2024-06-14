@@ -20,7 +20,6 @@
 
 #define PORT "3456"
 #define BACKLOG 10// how many pending connections queue will hold
-#define MAXDATASIZE 100 // max number of bytes we can get at once
 
 
 // to make receiving messages easier and encapsulate error handling
@@ -43,7 +42,7 @@ void recv_(int sockfd, Packet* packet){
 // to make turn the filename into an executable
 char* rmExtnsn(char* file){
   char *dotPos = strchr(file, '.');
-  size_t newLen = (dotPos != NULL) ? (dotPos - file) : strlen(file);
+  size_t newLen = (dotPos != NULL) ? (size_t)(dotPos - file) : strlen(file);
   
   // allocate memory for executable
   char* exe = (char*)malloc(newLen + 1);
@@ -115,12 +114,12 @@ void* handle_client(void* arg){
   free(arg); // dealocating memory allocated for clients file descriptor
   char buf[MAXDATASIZE];  
   Packet tempPack; 
-  //char filename[256 + MAXDATASIZE];
   char* filename = NULL;
+  int seqNum = 0;
   
   // initializing variables
   tempPack.initialize = initializePacket;
-  tempPack.initialize(&tempPack, 1, "");
+  tempPack.initialize(&tempPack, 1, seqNum, "");
   // clear buffers before using
   memset(buf, 0, MAXDATASIZE);
   //memset(filename, 0, 256 + MAXDATASIZE);
@@ -136,7 +135,6 @@ void* handle_client(void* arg){
   printf("Filename to test: %s\n", tempPack.payload);
 
   // making it so filename is (whatever name was sent)+threadId, so if multiple users send files with the same name, they will be unique
-  //strcat(filename, tempPack.payload);
   
   tempPack.free(&tempPack);
   // create file and prepare to write to it
@@ -157,7 +155,7 @@ void* handle_client(void* arg){
     printf("Entered while loop\n");
     
     // prep packet for receiving
-    tempPack.initialize(&tempPack, -1, "");
+    tempPack.initialize(&tempPack, -1,seqNum, "");
     
     // recieve message
     recv_(new_fd, &tempPack);
@@ -171,6 +169,7 @@ void* handle_client(void* arg){
     // write message to file
     fwrite(tempPack.payload, sizeof(char), tempPack.length, fp);
     tempPack.free(&tempPack);
+    seqNum++;
   }
   
   //done writing to file
@@ -261,7 +260,8 @@ int main(void){
   // main accept() loop
   while(1) {
     sin_size = sizeof their_addr;
-    int* new_fd_ptr = (int*)malloc(sizeof(int)); // to avoid race condition if we make all threads just use the same new_fd variable
+    // each thread gets its own new file descriptor pointer
+    int* new_fd_ptr = (int*)malloc(sizeof(int)); 
     
     *new_fd_ptr = accept(sockfd, (struct sockaddr*)&their_addr, &sin_size);
     
