@@ -5,81 +5,78 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define MAXDATASIZE 100 // max number of bytes we can get at once
+#define MAXDATASIZE 100 // size of packet
 // this is our packet structure that we will use to help facilitate the sending of messages from machine to machine
 // each packet will have a flag to indicate what kind of packet it is
 // each packet will have a payload, which is it's actual message
 
 typedef struct Packet {
-    int flag; // -1 for null packet, 0 for command, 1 for filename, 2 for file contents, 3 for last packet in transmission
-    int length;
+    int flag; // 1 for command, 2 for datafile, 3 for last datafile in transmission
+    int length; // length of payload
+    int seqNum; // sequence number of packet
     char* payload; // message inside packet
     
     // pointer functions for packets to use
-    void (*serialize)(struct Packet*);
+    char* (*serialize)(struct Packet*);
     void (*deserialize)(struct Packet*, char*);
-    void (*initialize)(struct Packet*, int, char*);
+    void (*initialize)(struct Packet*, int, int, char*);
     void (*free)(struct Packet*);    
 } Packet;
 
 // declaring functions
-void serialize(Packet* pkt);
+char* serialize(Packet* pkt);
 void deserialize(Packet* pkt, char* strpkt);
-void initializePacket(Packet* pkt, int flag, char* payload);
+void initializePacket(Packet* pkt, int flag, int seq, char* payload);
 void freePacket(Packet* pkt);
 
 // convert the packet to a sendable string
-void serialize(Packet* pkt){
+char* serialize(Packet* pkt){
   int initial_size = MAXDATASIZE;
-  int rsize;
+  int required_size;
   char* strpkt = (char*)malloc(initial_size);
   
   while (1) {
-        int n = snprintf(strpkt, initial_size, "%d-%d-%s", pkt->flag, pkt->length, pkt->payload);
+    int n = snprintf(strpkt, initial_size, "%d-%d-%d-%s", pkt->flag, pkt->length, pkt->seqNum, pkt->payload);
 
-        // Check if the buffer was large enough
-        if (n >= 0 && n < initial_size) {
-            // Serialization was successful
-            return strpkt;
-        }
-
-        // Buffer was too small, calculate required size
-        if (n < 0) {
-            perror("snprintf error");
-            free(strpkt);
-            exit(EXIT_FAILURE);
-        }
-
-        required_size = n + 1; // +1 for the null terminator
-
-        // Reallocate buffer with the required size
-        char* temp = (char*)realloc(strpkt, required_size);
-        if (temp == NULL) {
-            perror("Failed to reallocate memory");
-            free(strpkt);
-            exit(EXIT_FAILURE);
-        }
-
-        strpkt = temp;
-        initial_size = required_size;
+    // Check if the buffer was large enough
+    if (n >= 0 && n < initial_size) {
+      // Serialization was successful
+      return strpkt;
     }
-    
+
+    // Buffer was too small, calculate required size
+    if (n < 0) {
+      perror("snprintf error");
+      free(strpkt);
+      exit(EXIT_FAILURE);
+    }
+
+    required_size = n + 1; // +1 for the null terminator
+
+    // Reallocate buffer with the required size
+    char* temp = (char*)realloc(strpkt, required_size);
+    if (temp == NULL) {
+      perror("Failed to reallocate memory");
+      free(strpkt);
+      exit(EXIT_FAILURE);
+    }
+
+    strpkt = temp;
+    initial_size = required_size;
+  }
 }
 
 // converts the packets sendable string data into the data being held in our packet instance
 void deserialize(Packet* pkt, char* strpkt){
-  char* token, *ptr=NULL;
+  char* token;
   
   printf("received: %s\n", strpkt);
   
   // extract the flag
   token = strsep(&strpkt, "-");
   if(token == NULL){
-    printf("Invalid packet format\n");
-    if(ptr){
-      free(ptr);
-    }
-
+    printf("\n--------------------------\nFlag: Invalid packet format\n--------------------------\n");
+    printf("received: %s\n", strpkt);
     exit(1);
   }
   pkt->flag = atoi(token);
@@ -87,16 +84,27 @@ void deserialize(Packet* pkt, char* strpkt){
   // extract the length
   token = strsep(&strpkt, "-");
   if(token == NULL){
-    printf("Invalid packet format\n");
-    free(ptr);
+    printf("\n--------------------------\nLength: Invalid packet format\n--------------------------\n");
+    printf("received: %s\n", strpkt);
     exit(1);
   }
   pkt->length = atoi(token);
   
+  // extract the sequence number
+  token = strsep(&strpkt, "-");
+  if(token == NULL){
+    printf("\n--------------------------\nSequenceNumber: Invalid packet format\n--------------------------\n");
+    printf("received: %s\n", strpkt);
+    exit(1);
+  }
+  pkt->seqNum = atoi(token);
+  
   // free existing payload memory
+  /*
   if (pkt->payload){
     free(pkt->payload);
-  }  
+  }
+  */
   
   // extract the payload
   if(pkt->length == 0){
@@ -108,18 +116,15 @@ void deserialize(Packet* pkt, char* strpkt){
     pkt->payload[pkt->length] = '\0';
   } else {
     printf("Payload length is negative. Invalid\n");
-    free(ptr);
     exit(1);
-  }
-  if(ptr){
-    free(ptr); 
   }
 
 }
 
-void initializePacket(Packet* pkt, int flag, char* payload){
+void initializePacket(Packet* pkt, int flag, int seqNum, char* payload){
   pkt->flag = flag;
   pkt->length = strlen(payload);
+  pkt->seqNum = seqNum;
   pkt->payload = (char*)malloc(pkt->length + 1);
   strcpy(pkt->payload, payload);
   pkt->serialize = serialize;
