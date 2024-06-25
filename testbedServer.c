@@ -20,23 +20,52 @@
 
 #define PORT "3456"
 #define BACKLOG 10// how many pending connections queue will hold
+#define MAXINPUTARGS 5
 
-
-// to make receiving messages easier and encapsulate error handling
-void recv_(int sockfd, Packet* packet){
+// to help receive packets
+void recv_packet(int sockfd, Packet* pkt){
   char pktBuf[MAXDATASIZE];
   // clear buffer before using
   memset(pktBuf, 0, MAXDATASIZE);
   
-  // receive packet from client
+  // receive the packet
   if((recv(sockfd, pktBuf, MAXDATASIZE - 1, 0)) == -1){
       perror("recv");
       close(sockfd);
       exit(1);
   }
+  printf("Received: %s\n", pktBuf);
   
-  // parse information and store in packet
-  packet->deserialize(packet, pktBuf);
+  // parse packets information
+  pkt->deserialize(pkt, pktBuf);
+}
+
+
+// to make receiving messages easier and encapsulate error handling
+// sockfd is the socket file descriptor, fp is a pointer to the file we are going to be writing to 
+void recv_file(int sockfd, char* filename){
+  FILE* fp = fopen(filename, "w");
+  Packet pkt;
+  
+  if(fp == NULL){
+    perror("Error creating file");
+    close(sockfd);
+    exit(1);
+  }
+  
+  pkt.initialize = initializePacket;
+  pkt.initialize(&pkt, 0, 0, "");
+  
+  recv_packet(sockfd, &pkt);
+  while(!strcmp(pkt.payload, "EOF")){
+  
+    fprintf(fp, "%s", pkt.payload);
+    recv_packet(sockfd, &pkt);
+  }
+  
+  fclose(fp);
+  
+  printf("\nReceived final packet\n"); 
 }
 
 // to make turn the filename into an executable
@@ -105,7 +134,83 @@ void run(char* executable){
   return;
 }
 
+// trying a basic server shell the client can send commands to, then, add the file things in
+void* new_handle_client(void *arg){
+  
+  int new_fd = *((int*)arg);
+  free(arg); // dealocating memory allocated for clients file descriptor
+  char buf[MAXDATASIZE];  
+  Packet tempPack;
+  bool connection = true;
+  bool recFile = false;
+  
+  // initializing variables
+  tempPack.initialize = initializePacket;
+  tempPack.initialize(&tempPack, 0, 0, "");
+  // clear buffers before using
+  memset(buf, 0, MAXDATASIZE);
+  
+  // loop forever taking commands from client
+  // note that the recv function should be a blocking call, so we shouldn't be wasting cycles
+  while(connection){
+    
+    recv_packet(new_fd, &tempPack);
+    
+    printf("\nreceived: \n%s\n", tempPack.payload);
+    
+    // decide what to do once the packet has been received
+    switch(tempPack.flag){
+      case 0:
+        printf("Received user input packet\n");
+        
+        // tokenize input into arguments
+        char* token = strtok(tempPack.payload, " ");
+        int toki = 0;
+        char* inputArgs[MAXINPUTARGS];
+        while(token != NULL){
+          inputArgs[toki] = token;
+          token = strtok(NULL, " ");
+          toki++;
+        }
+        
+        
+        if(!strcmp(inputArgs[0], "test")) {
+          // we know we are going to be doing a test now
+          
+          // so we know we should be receiving a file
+          recFile = true;
+          
+          // building filename of file to test
+          char* filename = NULL;
+          
+          // populating filename with threadId followed by name of file to test
+          asprintf(&filename, "%"PRIu64 "%s", (uint64_t)pthread_self(), inputArgs[1]);  
+        }
+        
+        break;
+      case 1:
+        printf("Received file contents packet\n");
+        
+        if(recFile) {
+          
+        } else {
+          printf("Should not have received file contents packet\n");
+        }
+        
+        break;
+      case 3:
+        printf("Received EOT packet\n");
+        break;
+    }
+    tempPack.free(&tempPack);
+  }
+  
+  return NULL;
+}
+
+
 // function for theads to run to handle clients
+/*
 void* handle_client(void* arg){
   FILE* fp;
   bool doneReceiving = false;
@@ -188,7 +293,7 @@ void* handle_client(void* arg){
   printf("\nThread done\n");
   return NULL;
 }
-
+*/
 
 
 // get sockaddr, IPv4 or IPv6:
@@ -277,7 +382,7 @@ int main(void){
     
     // make thread to handle clients connection
     pthread_t thread_id;
-    if(pthread_create(&thread_id, NULL, handle_client, new_fd_ptr) != 0){
+    if(pthread_create(&thread_id, NULL, new_handle_client, new_fd_ptr) != 0){
       perror("pthread_create");
       free(new_fd_ptr);
       continue;
