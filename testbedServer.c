@@ -25,16 +25,18 @@
 // to help receive packets
 void recv_packet(int sockfd, Packet* pkt){
   char pktBuf[MAXDATASIZE];
+  ssize_t numBytes = 0;
   // clear buffer before using
   memset(pktBuf, 0, MAXDATASIZE);
   
   // receive the packet
-  if((recv(sockfd, pktBuf, MAXDATASIZE - 1, 0)) == -1){
+  if((numBytes = recv(sockfd, pktBuf, MAXDATASIZE - 1, 0)) == -1){
       perror("recv");
       close(sockfd);
       exit(1);
   }
-  printf("Received: %s\n", pktBuf);
+  //printf("Received: %s\n", pktBuf);
+  pktBuf[numBytes] = '\0';
   
   // parse packets information
   pkt->deserialize(pkt, pktBuf);
@@ -54,7 +56,7 @@ void recv_file(int sockfd, char* filename){
   }
   
   pkt.initialize = initializePacket;
-  pkt.initialize(&pkt, 0, 0, "");
+  pkt.initialize(&pkt, 0, "");
   
   recv_packet(sockfd, &pkt);
   while(!strcmp(pkt.payload, "EOF")){
@@ -146,7 +148,7 @@ void* new_handle_client(void *arg){
   
   // initializing variables
   tempPack.initialize = initializePacket;
-  tempPack.initialize(&tempPack, 0, 0, "");
+  tempPack.initialize(&tempPack, 0, "");
   // clear buffers before using
   memset(buf, 0, MAXDATASIZE);
   
@@ -172,6 +174,8 @@ void* new_handle_client(void *arg){
           token = strtok(NULL, " ");
           toki++;
         }
+        
+        printf("Made it here\n");
         
         
         if(!strcmp(inputArgs[0], "test")) {
