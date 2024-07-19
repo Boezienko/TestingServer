@@ -8,12 +8,14 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <stdbool.h>
 #include "packet.h"
 
 #define PORT "3456"
 #define SERVER_IP "144.96.151.55"
-#define MAXDATASIZE 100 // max number of bytes we can get at once
-
+#define MAXDATASIZE 100 // max number of bytes we can get at once from server
+#define MAXCOMMANDSIZE 100 // max number of bytes we can get at once for a command
+#define MAXCMDARGS 5 // max number of bytes we can get at once for a command
 
 // to make sending packets easier
 void send_packet(int sockfd, Packet* pkt){
@@ -78,14 +80,13 @@ int main(int argc, char *argv[]){
   struct addrinfo hints, *servinfo, *p;
   int rv;
   char s[INET6_ADDRSTRLEN];
+  bool connection = true;
+  char command[MAXCOMMANDSIZE];
+  char* cmdArgs[MAXCMDARGS];
   Packet tempPack;
-  tempPack.initialize = initializePacket;
   
-  // make sure correct number of expected arguments
-  if(argc != 3){
-    fprintf(stderr, "ussage: client filename testecase_filename\n");
-    return 1;
-  }
+  tempPack.initialize = initializePacket;
+  tempPack.initialize(&tempPack, 0, 0, "");
   
   // ensure hints is clear and read to be filled
   memset(&hints, 0, sizeof hints);
@@ -128,6 +129,74 @@ int main(int argc, char *argv[]){
   // check server IP we connected to
   inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), s, sizeof s);
   printf("client: connecting to %s\n", s);
+  
+  // start shell here so client can send things to server
+  while(connection){
+    printf("->");
+    fgets(command, MAXCOMMANDSIZE, stdin);
+    
+    // replace newline character with terminating character
+    command[strcspn(command, "\n")] = '\0';
+    
+    char commandcpy[MAXCOMMANDSIZE];
+    strcpy(commandcpy, command);
+    
+    // tokenize command into arguments
+    char* token = strtok(command, " ");
+    int i = 0;
+    while(token != NULL){
+      cmdArgs[i] = token;
+      token = strtok(NULL, " ");
+      i++;
+    }
+    
+    if(!strcmp(cmdArgs[0], "test")){
+      // cmdArgs1: file to test
+      // cmdArgs2: testcase file
+      
+      // send command to server
+      printf("sending command: %s\n", commandcpy);
+      tempPack.initialize(&tempPack, 0, 0, commandcpy);
+      send_packet(sockfd, &tempPack);
+      tempPack.free(&tempPack);
+      
+      // send name of file to test to server
+      /*
+      tempPack.initialize(&tempPack, 1, 0, cmdArgs[1]);
+      send_packet(sockfd, &tempPack);
+      tempPack.free(&tempPack);
+      */
+      
+      // send file to test to server
+      send_file(sockfd, cmdArgs[1]);
+      /*
+      // send testcase file
+      tempPack.initialize(&tempPack, 2, 0, cmdArgs[2]);
+      send_packet(sockfd, &tempPack);
+      tempPack.free(&tempPack);
+      */
+      continue;
+    } else if(!strcmp(cmdArgs[0], "ls-tests")){
+      // just send this string and receive the testcase files
+      tempPack.initialize(&tempPack, 1, 0, cmdArgs[0]);
+      send_packet(sockfd, &tempPack);
+      tempPack.free(&tempPack);
+        
+        /*
+          need to make it receive here and show the client the testcase files
+          we could maybe make a read, so you read the testcase and it's contents are
+          sent back to the client
+        */
+    } else {
+      printf("Invalid argument\n use the following\n test <fileToTest> <testcase>\n ls-tests\n");
+      continue;
+    }
+  
+    
+    
+  }
+  
+  
   
   // sending file to test's name
   tempPack.initialize(&tempPack, 1, 0, argv[1]);
