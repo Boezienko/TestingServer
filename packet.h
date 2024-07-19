@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 #define MAXDATASIZE 100 // size of payload
-#define MAXPACKSIZE 103 // size of packet
+#define MAXPACKSIZE 105 // size of packet
 // this is our packet structure that we will use to help facilitate the sending of messages from machine to machine
 // each packet will have a flag to indicate what kind of packet it is
 // each packet will have a payload, which is it's actual message

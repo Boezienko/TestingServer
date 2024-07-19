@@ -13,7 +13,6 @@
 #include "connInfo.h"
 
 #define PORT "3456"
-#define MAXDATASIZE 100 // max number of bytes we can get at once from server
 #define MAXINPUTSIZE 100 // max number of bytes we can get at once for a command
 #define MAXINPUTARGS 5 // max number of bytes we can get at once for a command
 
@@ -32,7 +31,14 @@ int main(int argc, char *argv[]){
   char* inputArgs[MAXINPUTARGS];
   Packet tempPack;
   
+  memset(input, 0, MAXINPUTSIZE);
+  
   tempPack.initialize = initializePacket;
+  
+  if(argc != 2){
+    printf("Usage: ./output_file server_IP_Address\n");
+    exit(1);
+  }
   
   sinfo = connect_to_server(argv[1]);
   
@@ -44,11 +50,11 @@ int main(int argc, char *argv[]){
     // replace newline character with terminating character
     input[strcspn(input, "\n")] = '\0';
     
-    tempPack.initialize(&tempPack, 0, 0, input);
+    tempPack.initialize(&tempPack, 0, input);
     
     // send input string to server
     send_packet(sinfo->sockfd, &tempPack);
-    
+    tempPack.free(&tempPack);
     
     // tokenize input into arguments
     char* token = strtok(input, " ");
@@ -60,10 +66,11 @@ int main(int argc, char *argv[]){
     }
     
     // do something based on the input
-    if(!strcmp(inputArgs[0], "test")){
+    if(!strcmp(inputArgs[0], "test")){ // if the user's first entered argument is "test"
       printf("Entered test input\n");
       
-      // send input string to server
+      send_file(sinfo->sockfd, inputArgs[1]);
+      ///////////////////////////////////////////////////////////
     
     
     } else if(!strcmp(inputArgs[0], "ls-tests")) {
@@ -169,21 +176,20 @@ void send_file(int sockfd, char* filename){
   Packet packet;
   char pktBuf[MAXDATASIZE];
   size_t numBytes;
-  int seqNum = 0;
   
   // prepare packet
   packet.initialize = initializePacket;
   
   while((numBytes = fread(pktBuf, 1, MAXDATASIZE-1, file)) > 0){
     pktBuf[numBytes] = '\0';
-    packet.initialize(&packet, 2, seqNum, pktBuf);
+    packet.initialize(&packet, 1, pktBuf);
     send_packet(sockfd, &packet);
+    //printf("We are in the reading while loop\n");
     packet.free(&packet);
-    seqNum++;
   }
   
   // send EOF packet
-  packet.initialize(&packet, 3, seqNum, "EOF");
+  packet.initialize(&packet, 3, "EOF");
   send_packet(sockfd, &packet);
   packet.free(&packet);
   
