@@ -24,13 +24,13 @@
 
 // to help receive packets
 void recv_packet(int sockfd, Packet* pkt){
-  char pktBuf[MAXDATASIZE];
+  char pktBuf[MAXPACKSIZE];
   ssize_t numBytes = 0;
   // clear buffer before using
-  memset(pktBuf, 0, MAXDATASIZE);
+  memset(pktBuf, 0, MAXPACKSIZE);
   
   // receive the packet
-  if((numBytes = recv(sockfd, pktBuf, MAXDATASIZE - 1, 0)) == -1){
+  if((numBytes = recv(sockfd, pktBuf, MAXPACKSIZE - 1, 0)) == -1){
       perror("recv");
       close(sockfd);
       exit(1);
@@ -40,34 +40,6 @@ void recv_packet(int sockfd, Packet* pkt){
   
   // parse packets information
   pkt->deserialize(pkt, pktBuf);
-}
-
-
-// to make receiving messages easier and encapsulate error handling
-// sockfd is the socket file descriptor, fp is a pointer to the file we are going to be writing to 
-void recv_file(int sockfd, char* filename){
-  FILE* fp = fopen(filename, "w");
-  Packet pkt;
-  
-  if(fp == NULL){
-    perror("Error creating file");
-    close(sockfd);
-    exit(1);
-  }
-  
-  pkt.initialize = initializePacket;
-  pkt.initialize(&pkt, 0, "");
-  
-  recv_packet(sockfd, &pkt);
-  while(!strcmp(pkt.payload, "EOF")){
-  
-    fprintf(fp, "%s", pkt.payload);
-    recv_packet(sockfd, &pkt);
-  }
-  
-  fclose(fp);
-  
-  printf("\nReceived final packet\n"); 
 }
 
 // to make turn the filename into an executable
@@ -145,10 +117,13 @@ void* new_handle_client(void *arg){
   Packet tempPack;
   bool connection = true;
   bool recFile = false;
+  FILE* fp = NULL;
+  char* filename = NULL;
   
   // initializing variables
   tempPack.initialize = initializePacket;
   tempPack.initialize(&tempPack, 0, "");
+  
   // clear buffers before using
   memset(buf, 0, MAXDATASIZE);
   
@@ -169,14 +144,12 @@ void* new_handle_client(void *arg){
         char* token = strtok(tempPack.payload, " ");
         int toki = 0;
         char* inputArgs[MAXINPUTARGS];
-        while(token != NULL){
+        while(token != NULL && toki < MAXINPUTARGS){
           inputArgs[toki] = token;
           token = strtok(NULL, " ");
           toki++;
         }
-        
-        printf("Made it here\n");
-        
+        inputArgs[toki] = NULL;
         
         if(!strcmp(inputArgs[0], "test")) {
           // we know we are going to be doing a test now
@@ -184,120 +157,46 @@ void* new_handle_client(void *arg){
           // so we know we should be receiving a file
           recFile = true;
           
-          // building filename of file to test
-          char* filename = NULL;
-          
           // populating filename with threadId followed by name of file to test
-          asprintf(&filename, "%"PRIu64 "%s", (uint64_t)pthread_self(), inputArgs[1]);  
+          asprintf(&filename, "%"PRIu64 "%s", (uint64_t)pthread_self(), inputArgs[1]);
+          
+          // create the file with filename
+          fp = fopen(filename, "w");
+          
+          if (fp == NULL) {
+            perror("Error creating file");
+            free(filename);
+            connection = false;
+          }
         }
-        
         break;
       case 1:
         printf("Received file contents packet\n");
-        
-        if(recFile) {
-          
+        if(recFile){
+          fprintf(fp, "%s", tempPack.payload);
         } else {
           printf("Should not have received file contents packet\n");
         }
-        
+
         break;
       case 3:
         printf("Received EOT packet\n");
+        
+        if(recFile && fp){
+          fclose(fp);
+          fp = NULL;
+        }
+        free(filename);
+        filename = NULL;
+        recFile = false;
         break;
     }
+    
     tempPack.free(&tempPack);
   }
   
   return NULL;
 }
-
-
-// function for theads to run to handle clients
-/*
-void* handle_client(void* arg){
-  FILE* fp;
-  bool doneReceiving = false;
-  int numbytes = 0;
-  int new_fd = *((int*)arg);
-  free(arg); // dealocating memory allocated for clients file descriptor
-  char buf[MAXDATASIZE];  
-  Packet tempPack; 
-  char* filename = NULL;
-  int seqNum = 0;
-  
-  // initializing variables
-  tempPack.initialize = initializePacket;
-  tempPack.initialize(&tempPack, 1, seqNum, "");
-  // clear buffers before using
-  memset(buf, 0, MAXDATASIZE);
-  //memset(filename, 0, 256 + MAXDATASIZE);
-  
-  // get filename from client
-  recv_(new_fd, &tempPack);
-  
-  // populating filename with threadId
-  asprintf(&filename, "%"PRIu64 "%s", (uint64_t)pthread_self(), tempPack.payload);
-
-
-  // show what filename we're testing
-  printf("Filename to test: %s\n", tempPack.payload);
-
-  // making it so filename is (whatever name was sent)+threadId, so if multiple users send files with the same name, they will be unique
-  
-  tempPack.free(&tempPack);
-  // create file and prepare to write to it
-  fp = fopen(filename, "w");
-  if(fp == NULL){
-    perror("Error creating file");
-    close(new_fd);
-    exit(1);
-  }
-  
-  // get testcase file name
-  recv_(new_fd, &tempPack);
-  printf("Testcase filename: %s\n", tempPack.payload);
-  tempPack.free(&tempPack);
-  
-  // get file from client
-  while(!doneReceiving){
-    printf("Entered while loop\n");
-    
-    // prep packet for receiving
-    tempPack.initialize(&tempPack, -1,seqNum, "");
-    
-    // recieve message
-    recv_(new_fd, &tempPack);
-        
-    if(tempPack.flag == 3){
-      doneReceiving = true;
-      tempPack.free(&tempPack);
-      continue;
-    }
-    
-    // write message to file
-    fwrite(tempPack.payload, sizeof(char), tempPack.length, fp);
-    tempPack.free(&tempPack);
-    seqNum++;
-  }
-  
-  //done writing to file
-  fclose(fp);
-  
-  // compile and run the file
-  char* executable = compile(filename);
-  run(executable);
-  
-  // done running submitted code
-  free(executable);
-  free(filename);
-  
-  // done communicating with client
-  close(new_fd);
-  printf("\nThread done\n");
-  return NULL;
-}
-*/
 
 
 // get sockaddr, IPv4 or IPv6:

@@ -46,7 +46,7 @@ void deserialize(Packet* pkt, char* strpkt){
     exit(EXIT_FAILURE);
   }
   
-  printf("received: %s\n", strpkt);
+  //printf("received: %s\n", strpkt);
   
   // extract the flag
   token = strtok(strpktcpy, "-");
