@@ -39,24 +39,36 @@ char* serialize(Packet* pkt){
 // converts the packets sendable string data into the data being held in our packet instance
 void deserialize(Packet* pkt, char* strpkt){
   char* token;
+  // copy original string
+  char* strpktcpy = strdup(strpkt);
+  if(!strpktcpy){
+    perror("strdup");
+    exit(EXIT_FAILURE);
+  }
   
-  printf("received: %s\n", strpkt);
+  //printf("received: %s\n", strpkt);
   
   // extract the flag
-  token = strsep(&strpkt, "-");
+  token = strtok(strpktcpy, "-");
   if(token == NULL){
-    printf("\n--------------------------\nFlag: Invalid packet format\n--------------------------\n");
-    printf("received: %s\n", strpkt);
+    printf("Invalid packet format\n");
+    //printf("received: %s\n", strpkt);
+    free(strpktcpy);
     exit(1);
   }
   pkt->flag = atoi(token);
   
   // extract the payload
-    token = strpkt;
-    pkt->payload = (char*)malloc(strlen(pkt->payload) + 1);
-    strncpy(pkt->payload, token, strlen(pkt->payload) + 1);
-    pkt->payload[strlen(pkt->payload) + 1] = '\0';
-
+  token = strtok(NULL, "");
+  if(token != NULL) {
+    pkt->payload = (char*)malloc(strlen(token) + 1);
+    strcpy(pkt->payload, token);
+  } else {
+    // in case payload is empty
+    pkt->payload = strdup("");
+  }
+  
+  free(strpktcpy);
 }
 
 void initializePacket(Packet* pkt, int flag, char* payload){
