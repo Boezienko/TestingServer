@@ -76,6 +76,7 @@ char* compile(char* filename){
 
   // wait for compilation to complete
   waitpid(pid, &status, 0);
+  printf("Compiled %s\n", filename);
   
   // make executable produced runable
   if(chmod(executable, S_IRWXU) == -1){
@@ -96,15 +97,16 @@ void run(char* executable){
   
   // make child process to run executable
   if(!(pid = fork())){
-    char *args[] = {arg0, "9", NULL};
-    if(execvp(args[0], args)){
+    char *args[] = {arg0, "9", NULL}; // currently just testing with 9
+    if(execvp(args[0], args)){ // need to see if we can get 
       // if execvp returns, an error occured
       perror("execvp");
       exit(EXIT_FAILURE);
     }
   }
   
-    waitpid(pid, &status, 0);
+  waitpid(pid, &status, 0);
+  printf("Ran %s\n", executable);
   return;
 }
 
@@ -117,6 +119,7 @@ void* new_handle_client(void *arg){
   Packet tempPack;
   bool connection = true;
   bool recFile = false;
+  bool testFile = false;
   FILE* fp = NULL;
   char* filename = NULL;
   
@@ -153,7 +156,7 @@ void* new_handle_client(void *arg){
         
         if(!strcmp(inputArgs[0], "test")) {
           // we know we are going to be doing a test now
-          
+          testFile = true;
           // so we know we should be receiving a file
           recFile = true;
           
@@ -186,6 +189,12 @@ void* new_handle_client(void *arg){
           fclose(fp);
           fp = NULL;
         }
+        
+        if(testFile) {
+          char* executable = compile(filename);
+          run(executable);
+        }
+        
         free(filename);
         filename = NULL;
         recFile = false;
