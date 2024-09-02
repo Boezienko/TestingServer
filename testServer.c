@@ -21,6 +21,7 @@
 #define PORT "3456"
 #define BACKLOG 10// how many pending connections queue will hold
 #define MAXINPUTARGS 5
+#define PIPEBUFSIZE 100
 
 // to help receive packets
 void recv_packet(int sockfd, Packet* pkt){
@@ -58,7 +59,6 @@ char* rmExtnsn(char* file){
 }
 
 // function to compile a file
-// IF THIS FUNCTION IS USED RUN ALSO NEEDS TO BE USED
 char* compile(char* filename){
   pid_t pid;
   int status;
@@ -108,6 +108,63 @@ void run(char* executable){
   waitpid(pid, &status, 0);
   printf("Ran %s\n", executable);
   return;
+}
+
+// returns the result of the test
+/*
+  Need to redirect standard output of the code we are running and get it here
+*/
+char* test(char* executable, char* testcase){
+  pid_t pid;
+  int status;
+  char arg0[strlen(executable) + 3]; // 3 for './' and null terminating character
+  int pipefd[2];
+  char buf[PIPEBUFSIZE];
+  
+  // making pipe to get results from child process running executable
+  if (pipe(pipefd) == -1){
+    perror("pipe");
+    exit(EXIT_FAILURE);
+  }
+  
+  // making first argument
+  snprintf(arg0, sizeof(arg0), "./%s", executable);
+  
+  if(!(pid = fork())){ // child process, responsible for running executable
+    char *args[] = {arg0, testcase, NULL};
+    
+    // child not reading
+    close(pipefd[0]);
+    // redirecting standard output to the pipe
+    dup2(pipefd[1], STDOUT_FILENO);
+    close(pipefd[1]);
+    
+    if(execvp(args[0], args)){ 
+      // if execvp returns, an error occured
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+  } else { // parent process, get results from child process
+    // parent not writing
+    close(pipefd[1]);
+    
+    // wait for child to finish running
+    waitpid(pid, &status, 0);
+    
+    // reading output from pipe
+    ssize_t numBytes = read(pipefd[0], buf, PIPEBUFSIZE - 1);
+    if (numBytes == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+    }
+    
+    buf[numBytes] = '\0';
+    // done reading
+    close(pipefd[0]);
+  }
+  
+  printf("Output from %s: \n%s\n", executable, buf);
+  
 }
 
 // trying a basic server shell the client can send commands to, then, add the file things in
@@ -192,9 +249,11 @@ void* new_handle_client(void *arg){
         
         if(testFile) {
           char* executable = compile(filename);
-          run(executable);
+          test(executable, "9");
         }
         
+        // resetting variables so more testing can be done
+        testFile = false;
         free(filename);
         filename = NULL;
         recFile = false;
