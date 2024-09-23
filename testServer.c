@@ -17,10 +17,13 @@
 #include <string.h>
 #include <inttypes.h>
 #include "packet.h"
+#include "testData.h"
 
 #define PORT "3456"
 #define BACKLOG 10// how many pending connections queue will hold
 #define MAXINPUTARGS 5
+#define PIPEBUFSIZE 100
+#define MAXTESTLINELEN 12 // how big each testcase line can be _____,_____
 
 // to help receive packets
 void recv_packet(int sockfd, Packet* pkt){
@@ -42,6 +45,31 @@ void recv_packet(int sockfd, Packet* pkt){
   pkt->deserialize(pkt, pktBuf);
 }
 
+// to make sending packets easier
+void send_packet(int sockfd, Packet* pkt){
+  char* spkt = pkt->serialize(pkt);
+  
+  printf("\nSending:\n%s\n", spkt);
+  
+  if(send(sockfd, spkt, strlen(spkt), 0) == -1){
+    perror("send");
+  }
+  free(spkt);
+  // so multiple sends streams aren't interpreted as one
+  sleep(1);
+}
+
+// to remove trailing whitespace and newline characters from expected output
+void trim(char* str){
+  if(str == NULL) return;
+  
+  size_t len = strlen(str);
+  while(len > 0 && isspace((unsigned char)str[len - 1])) {
+    str[len - 1] = '\0';
+    len--;
+  }
+}
+
 // to make turn the filename into an executable
 char* rmExtnsn(char* file){
   char *dotPos = strchr(file, '.');
@@ -58,7 +86,6 @@ char* rmExtnsn(char* file){
 }
 
 // function to compile a file
-// IF THIS FUNCTION IS USED RUN ALSO NEEDS TO BE USED
 char* compile(char* filename){
   pid_t pid;
   int status;
@@ -76,6 +103,7 @@ char* compile(char* filename){
 
   // wait for compilation to complete
   waitpid(pid, &status, 0);
+  printf("Compiled %s\n", filename);
   
   // make executable produced runable
   if(chmod(executable, S_IRWXU) == -1){
@@ -86,26 +114,116 @@ char* compile(char* filename){
   return executable; // note that this is still allocated on the heap and still needs to be freed
 }
 
-void run(char* executable){
+// returns the result of the test
+/*
+  Need to redirect standard output of the code we are running and get it here
+*/
+char* test(char* executable, char* testcase){
   pid_t pid;
   int status;
-  char arg0[strlen(executable) + 3];
+  char arg0[strlen(executable) + 3]; // 3 for './' and null terminating character
+  int pipefd[2];
+  char buf[PIPEBUFSIZE];
+  
+  // making pipe to get results from child process running executable
+  if (pipe(pipefd) == -1){
+    perror("pipe");
+    exit(EXIT_FAILURE);
+  }
   
   // making first argument
   snprintf(arg0, sizeof(arg0), "./%s", executable);
   
-  // make child process to run executable
-  if(!(pid = fork())){
-    char *args[] = {arg0, "9", NULL};
-    if(execvp(args[0], args)){
+  if(!(pid = fork())){ // child process, responsible for running executable
+    char *args[] = {arg0, testcase, NULL};
+    
+    // child not reading
+    close(pipefd[0]);
+    // redirecting standard output to the pipe
+    dup2(pipefd[1], STDOUT_FILENO);
+    close(pipefd[1]);
+    
+    if(execvp(args[0], args)){ 
       // if execvp returns, an error occured
       perror("execvp");
       exit(EXIT_FAILURE);
     }
+  } else { // parent process, get results from child process
+    // parent not writing
+    close(pipefd[1]);
+    
+    // wait for child to finish running
+    waitpid(pid, &status, 0);
+    
+    // reading output from pipe
+    ssize_t numBytes = read(pipefd[0], buf, PIPEBUFSIZE - 1);
+    if (numBytes == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+    }
+    
+    buf[numBytes] = '\0';
+    // done reading
+    close(pipefd[0]);
   }
   
-    waitpid(pid, &status, 0);
-  return;
+  //printf("Output from %s: \n%s\n", executable, buf);
+  return strdup(buf);
+}
+
+// populates structure that holds all our tests we will be running
+void populateTestCases(TestData* testCases, char* testFile){
+  FILE* fp = NULL;
+  char line[MAXTESTLINELEN];
+  printf("testfile name passed in: %s", testFile);
+  fp = fopen(testFile, "r");
+
+  if (fp == NULL) {
+    perror("Error opening file");
+    exit(EXIT_FAILURE);
+  }
+  
+  // read testcases and store them
+  while(fgets(line, sizeof(line), fp)){
+    char* input = strtok(line, ",");
+    char* expectedOutput = strtok(NULL, ",");
+    
+    if (input && expectedOutput) {
+      // getting rid of trailing whitespace and newlines
+      trim(expectedOutput);
+    
+      testCases->addTestCase(testCases, input, expectedOutput);
+    } else {
+      perror("Invalid line format");
+    }
+  }
+  
+  fclose(fp);
+}
+
+// tests the compiled executable using the testcases
+char* runTests(char* executable, TestData* testCases) {
+  // so results can hold "Passed: ___\nFailed ___\n\0", so we can have up to 999 testcases
+  char* results = (char*)malloc(25 * sizeof(char));
+  int passed = 0;
+  int failed = 0;
+  
+  for(int i = 0; i < testCases->size; i++) {
+    TestCase* tc = testCases->getTestCase(testCases, i);
+    char* output = test(executable, tc->input);
+    
+    // show results on server but change later to let client know
+    if(strcmp(output, tc->expectedOutput) == 0) {
+      printf("Test %d passed\n", i+1);
+      passed++;
+    } else {
+      printf("Test %d failed: expected %s, got %s\n", i+1, tc->expectedOutput, output);
+      failed++;
+    }
+  }
+  // formating results to send to client
+  snprintf(results, 25, "Passed: %d\nFailed: %d\n", passed, failed);
+  return results;
 }
 
 // trying a basic server shell the client can send commands to, then, add the file things in
@@ -117,12 +235,18 @@ void* new_handle_client(void *arg){
   Packet tempPack;
   bool connection = true;
   bool recFile = false;
+  bool testFile = false;
   FILE* fp = NULL;
   char* filename = NULL;
+  TestData testCases;
+
   
   // initializing variables
   tempPack.initialize = initializePacket;
   tempPack.initialize(&tempPack, 0, "");
+
+  testCases.initialize = initializeTestData;
+  testCases.initialize(&testCases);
   
   // clear buffers before using
   memset(buf, 0, MAXDATASIZE);
@@ -146,14 +270,21 @@ void* new_handle_client(void *arg){
         char* inputArgs[MAXINPUTARGS];
         while(token != NULL && toki < MAXINPUTARGS){
           inputArgs[toki] = token;
+          printf("input arg: %s", inputArgs[toki]);
           token = strtok(NULL, " ");
           toki++;
         }
         inputArgs[toki] = NULL;
         
+        int kounter = 0;
+        while(inputArgs[kounter] != NULL){
+          printf("input arg %d: %s\n", kounter, inputArgs[kounter]);
+          kounter++;
+        }
+        
         if(!strcmp(inputArgs[0], "test")) {
           // we know we are going to be doing a test now
-          
+          testFile = true;
           // so we know we should be receiving a file
           recFile = true;
           
@@ -168,6 +299,11 @@ void* new_handle_client(void *arg){
             free(filename);
             connection = false;
           }
+          
+          // populating testcases
+          printf("Testcase file name: %s", inputArgs[2]);
+          populateTestCases(&testCases, inputArgs[2]);
+          
         }
         break;
       case 1:
@@ -182,10 +318,21 @@ void* new_handle_client(void *arg){
       case 3:
         printf("Received EOT packet\n");
         
-        if(recFile && fp){
+        if(fp){
           fclose(fp);
           fp = NULL;
         }
+        
+        if(testFile) {
+          char* executable = compile(filename);
+          char* results = runTests(executable, &testCases);
+          tempPack.initialize(&tempPack, 0, results);
+          send_packet(new_fd, &tempPack);
+          free(results);
+        }
+        
+        // resetting variables so more testing can be done
+        testFile = false;
         free(filename);
         filename = NULL;
         recFile = false;

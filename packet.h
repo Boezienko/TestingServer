@@ -52,7 +52,7 @@ void deserialize(Packet* pkt, char* strpkt){
   token = strtok(strpktcpy, "-");
   if(token == NULL){
     printf("Invalid packet format\n");
-    //printf("received: %s\n", strpkt);
+    printf("received: %s\n", strpkt);
     free(strpktcpy);
     exit(1);
   }
