@@ -1,3 +1,6 @@
+#ifndef CONNINFO_H
+#define CONNINFO_H
+
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -28,3 +31,5 @@ void freeConnInfo(ConnInfo* conn){
   close(conn->sockfd);
   free(conn);
 }
+
+#endif

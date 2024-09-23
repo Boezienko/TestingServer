@@ -24,8 +24,11 @@ void send_packet(int sockfd, Packet* pkt);
 void send_file(int sockfd, char* filename);
 // gets address IPv4 or IPv6
 void *get_in_addr(struct sockaddr *sa);
+// recieves packets from server
+void recv_packet(int sockfd, Packet* pkt);
 
 int main(int argc, char *argv[]){
+  printf("Running");
   ConnInfo* sinfo;
   char input[MAXINPUTSIZE];
   char* inputArgs[MAXINPUTARGS];
@@ -71,6 +74,8 @@ int main(int argc, char *argv[]){
       
       send_file(sinfo->sockfd, inputArgs[1]);
       ///////////////////////////////////////////////////////////
+      recv_packet(sinfo->sockfd, &tempPack);
+      printf("Results:\n%s", tempPack.payload);
     
     
     } else if(!strcmp(inputArgs[0], "ls-tests")) {
@@ -188,12 +193,29 @@ void send_file(int sockfd, char* filename){
     packet.free(&packet);
   }
   
-  // send EOF packet
-  packet.initialize(&packet, 3, "EOF");
+  // send EOT packet
+  packet.initialize(&packet, 3, "EOT");
   send_packet(sockfd, &packet);
   packet.free(&packet);
   
   fclose(file);
+}
+
+void recv_packet(int sockfd, Packet* pkt){
+  char pktBuf[MAXPACKSIZE];
+  ssize_t numBytes = 0;
+  // clear buffer before using
+  memset(pktBuf, 0, MAXPACKSIZE);
+  
+  // receive the packet
+  if((numBytes = recv(sockfd, pktBuf, MAXPACKSIZE - 1, 0)) == -1){
+    perror("recv");
+    close(sockfd);
+    exit(1);
+  }
+  pktBuf[numBytes] = '\0';
+  // parse packet's information
+  pkt->deserialize(pkt, pktBuf);
 }
 
 // get sockaddr, IPv4 or IPv6:
